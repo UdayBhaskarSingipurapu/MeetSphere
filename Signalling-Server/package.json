@@ -1,0 +1,25 @@
+{
+  "name": "signalling-server",
+  "version": "1.0.0",
+  "description": "MeetSphere signalling server",
+  "license": "ISC",
+  "author": "Uday Bhaskar",
+  "type": "module",
+  "main": "server.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx server.ts",
+    "dev:watch": "tsx watch server.ts"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.6.3"
+  }
+}
