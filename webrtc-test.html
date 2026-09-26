@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebRTC Signaling Test</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #111;
+        color: #eee;
+        padding: 20px;
+      }
+      video {
+        width: 45%;
+        background: #000;
+        border-radius: 8px;
+        margin: 8px;
+      }
+      #log {
+        background: #000;
+        color: #0f0;
+        font-family: monospace;
+        font-size: 12px;
+        padding: 10px;
+        height: 200px;
+        overflow-y: auto;
+        margin-top: 20px;
+        white-space: pre-wrap;
+      }
+      button {
+        padding: 8px 16px;
+        margin-right: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>WebRTC Signaling Test (no framework — for learning the raw flow)</h2>
+
+    <div>
+      Room: <input id="roomId" value="test-room" /> User ID:
+      <input id="userId" value="" />
+      <button id="joinBtn">Join Room</button>
+      <button id="callBtn" disabled>Call (create offer)</button>
+    </div>
+
+    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+
+    <div id="log"></div>
+
+    <script>
+      // ---- tiny logger so you can SEE the state machine happening ----
+      const logEl = document.getElementById("log");
+      function log(msg) {
+        console.log(msg);
+        logEl.textContent += msg + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // generate a random userId per tab so two tabs don't collide
+      document.getElementById("userId").value =
+        "user-" + Math.floor(Math.random() * 1000);
+
+      let ws;
+      let pc; // RTCPeerConnection
+      let roomId;
+      let userId;
+
+      // STUN server so ICE can discover your public-facing candidates.
+      // Google's public STUN server — fine for local dev/testing.
+      const ICE_SERVERS = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      };
+
+      // ---- Step 1: get camera/mic, show local preview ----
+      async function initMedia() {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+        document.getElementById("localVideo").srcObject = stream;
+        log("[media] got local camera stream");
+        return stream;
+      }
+
+      // ---- Step 2: connect to your Node signaling server ----
+      function connectSignaling() {
+        ws = new WebSocket("ws://localhost:5000");
+
+        ws.onopen = () => {
+          log("[ws] connected to signaling server");
+          ws.send(JSON.stringify({ type: "join", roomId, userId }));
+          log(`[ws] sent join for room=${roomId} user=${userId}`);
+          document.getElementById("callBtn").disabled = false;
+        };
+
+        ws.onmessage = async (event) => {
+          const msg = JSON.parse(event.data);
+          log("[ws] received: " + msg.type);
+
+          if (msg.type === "offer") {
+            // someone else created an offer — we're the callee
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: "answer", sdp: answer }));
+            log("[pc] set remote offer, sent answer");
+          }
+
+          if (msg.type === "answer") {
+            // our offer was accepted — apply their answer
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            log("[pc] set remote answer — negotiation should complete now");
+          }
+
+          if (msg.type === "ice-candidate") {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+              log("[pc] added remote ICE candidate");
+            } catch (err) {
+              log("[pc] error adding ICE candidate: " + err);
+            }
+          }
+
+          if (msg.type === 'peer-left') {
+            log('[ws] peer left the call — tearing down connection');
+            if (pc) {
+              pc.close();
+            }
+            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('callBtn').disabled = false; // allow re-calling if someone rejoins
+          }
+
+          if (msg.type === 'chat') {
+            log(`[chat] ${msg.from}: ${msg.message}`);
+          }
+        };
+
+        ws.onclose = () => log("[ws] disconnected");
+      }
+
+      // ---- Step 3: set up RTCPeerConnection ----
+      function initPeerConnection(localStream) {
+        pc = new RTCPeerConnection(ICE_SERVERS);
+
+        // send our media to the other peer
+        localStream
+          .getTracks()
+          .forEach((track) => pc.addTrack(track, localStream));
+
+        // fires once per discovered ICE candidate — asynchronous, happens over time
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            log("[pc] found local ICE candidate, sending");
+            ws.send(
+              JSON.stringify({
+                type: "ice-candidate",
+                candidate: event.candidate,
+              }),
+            );
+          } else {
+            log("[pc] ICE gathering complete");
+          }
+        };
+
+        // fires when the other peer's media track arrives
+        pc.ontrack = (event) => {
+          log("[pc] remote track received");
+          document.getElementById("remoteVideo").srcObject = event.streams[0];
+        };
+
+        pc.onconnectionstatechange = () => {
+          log("[pc] connection state: " + pc.connectionState);
+        };
+      }
+
+      // ---- Wire up buttons ----
+      document.getElementById("joinBtn").onclick = async () => {
+        roomId = document.getElementById("roomId").value;
+        userId = document.getElementById("userId").value;
+
+        const stream = await initMedia();
+        initPeerConnection(stream);
+        connectSignaling();
+      };
+
+      document.getElementById("callBtn").onclick = async () => {
+        // the initiating peer creates the offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: "offer", sdp: offer }));
+        log("[pc] created and sent offer");
+      };
+    </script>
+  </body>
+</html>

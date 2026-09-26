@@ -74,8 +74,9 @@ wss.on("connection", (ws, req) => {
         if(msg.type === "chat") {
             const senderMeta = clientMeta.get(ws);
             if(!senderMeta) {
-                // the sender hasn't joined the room yet
-                ws.send(`please join in any room to send message`);
+                if(ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "error", message: "join a room before sending chat" }));
+                }
                 return;
             }     
 
@@ -83,15 +84,38 @@ wss.on("connection", (ws, req) => {
             console.log(`sending message to total users: ${room?.size}`)
             room?.forEach((client) => {
                 if(client !== ws && client.readyState === WebSocket.OPEN){
-                    client.send(`user: ${senderMeta.userId} sent message: ${msg.message}`);
+                    client.send(JSON.stringify({ type: "chat", from: senderMeta.userId, message: msg.message }));
                 }
             })
         }
+        if (msg.type === "offer" || msg.type === "answer" || msg.type === "ice-candidate") {
+            const senderMeta = clientMeta.get(ws);
+            if (!senderMeta) {
+                ws.send(JSON.stringify({ type: "error", message: "join a room before signaling" }));
+                return;
+            }
+
+            const room = roomClients.get(senderMeta.roomId);
+            room?.forEach((client) => {
+                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({ ...msg, from: senderMeta.userId }));
+                }
+            });
+        }
     })
     ws.on("close", () => {
+        const meta = clientMeta.get(ws);
+        if (meta) {
+            const room = roomClients.get(meta.roomId);
+            room?.forEach((client) => {
+                if (client !== ws && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({ type: "peer-left", userId: meta.userId }));
+                }
+            });
+        }
+
         removeClientFromCurrentRoom(ws);
         clientMeta.delete(ws);
-        
         console.log("client disconnected");
     })
     ws.on("error", (err) => {
