@@ -1,4 +1,20 @@
 
 node_modules
 
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Maven
+**/target/
+**/.mvn/timing.properties
+
+# Environment / secrets
 .env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
